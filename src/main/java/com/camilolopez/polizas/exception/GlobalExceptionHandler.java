@@ -11,6 +11,10 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.ErrorResponse;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -39,6 +43,14 @@ public class GlobalExceptionHandler {
             IllegalArgumentException.class})
     ResponseEntity<ApiError> invalid(Exception ex, HttpServletRequest req) {
         return error(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Solicitud inválida", req);
+    }
+    @ExceptionHandler({HttpRequestMethodNotSupportedException.class,
+            HttpMediaTypeNotSupportedException.class, NoResourceFoundException.class})
+    ResponseEntity<ApiError> httpError(Exception ex, HttpServletRequest req) {
+        ErrorResponse response = (ErrorResponse) ex;
+        return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders())
+                .body(ApiError.of(response.getStatusCode().value(), "HTTP_ERROR",
+                        "Ruta, método o formato de contenido no admitido", req.getRequestURI()));
     }
     @ExceptionHandler(Exception.class)
     ResponseEntity<ApiError> unexpected(Exception ex, HttpServletRequest req) {

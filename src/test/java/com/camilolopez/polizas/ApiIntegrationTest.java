@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.*;
 import org.springframework.test.context.ActiveProfiles;
+import tools.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.*;
@@ -25,6 +26,7 @@ class ApiIntegrationTest {
     @Autowired PolizaRepository polizas;
     @Autowired RiesgoRepository riesgos;
     @Autowired CountingCore core;
+    @Autowired ObjectMapper mapper;
     final HttpClient http = HttpClient.newHttpClient();
     Long individual, colectiva, cancelada, riesgoColectivo;
 
@@ -74,10 +76,79 @@ class ApiIntegrationTest {
     @Test void listAndValidation() throws Exception {
         assertEquals(200, call("GET", "/polizas?tipo=COLECTIVA&estado=ACTIVA", null, "api-key", "123456").statusCode());
         assertEquals("[]", call("GET", "/polizas?tipo=COLECTIVA&estado=CANCELADA", null, "api-key", "123456").body());
+        HttpResponse<String> first = call("GET", "/polizas?limit=1", null, "api-key", "123456");
+        assertEquals(200, first.statusCode());
+        assertEquals("true", first.headers().firstValue("X-Has-More").orElseThrow());
+        assertEquals(individual.toString(), first.headers().firstValue("X-Next-Cursor").orElseThrow());
+        assertTrue(first.headers().firstValue("Link").orElseThrow().contains("afterId=" + individual));
+        assertTrue(first.body().contains("\"id\":" + individual));
+        HttpResponse<String> second = call("GET", "/polizas?limit=1&afterId=" + individual,
+                null, "api-key", "123456");
+        assertTrue(second.body().contains("\"id\":" + colectiva));
         assertEquals(400, call("GET", "/polizas?tipo=BAD", null, "api-key", "123456").statusCode());
+        assertEquals(400, call("GET", "/polizas?limit=0", null, "api-key", "123456").statusCode());
+        assertEquals(400, call("GET", "/polizas?limit=101", null, "api-key", "123456").statusCode());
+        assertEquals(400, call("GET", "/polizas?afterId=-1", null, "api-key", "123456").statusCode());
         assertEquals(400, call("GET", "/polizas/abc/riesgos", null, "api-key", "123456").statusCode());
         assertEquals(400, call("GET", "/polizas/0/riesgos", null, "api-key", "123456").statusCode());
         assertEquals(404, call("GET", "/polizas/999999/riesgos", null, "api-key", "123456").statusCode());
+        assertEquals(0, core.count.get());
+    }
+    @Test void cursorTraversesAllResultsAndPreservesFilters() throws Exception {
+        var first = call("GET", "/polizas?limit=1", null, "api-key", "123456");
+        assertEquals(1, mapper.readTree(first.body()).size());
+        assertEquals(individual.longValue(), mapper.readTree(first.body()).get(0).get("id").asLong());
+        var second = call("GET", "/polizas?limit=1&afterId=" + individual, null, "api-key", "123456");
+        assertEquals(1, mapper.readTree(second.body()).size());
+        assertEquals(colectiva.longValue(), mapper.readTree(second.body()).get(0).get("id").asLong());
+        var last = call("GET", "/polizas?limit=1&afterId=" + colectiva, null, "api-key", "123456");
+        assertEquals(cancelada.longValue(), mapper.readTree(last.body()).get(0).get("id").asLong());
+        assertEquals("false", last.headers().firstValue("X-Has-More").orElseThrow());
+        assertTrue(last.headers().firstValue("X-Next-Cursor").isEmpty());
+        assertTrue(last.headers().firstValue("Link").isEmpty());
+        var empty = call("GET", "/polizas?afterId=" + cancelada, null, "api-key", "123456");
+        assertEquals("[]", empty.body());
+        assertEquals("false", empty.headers().firstValue("X-Has-More").orElseThrow());
+
+        var byType = call("GET", "/polizas?tipo=INDIVIDUAL&limit=1", null, "api-key", "123456");
+        assertTrue(byType.headers().firstValue("Link").orElseThrow().contains("tipo=INDIVIDUAL"));
+        var filteredNext = call("GET", "/polizas?tipo=INDIVIDUAL&limit=1&afterId=" + individual,
+                null, "api-key", "123456");
+        assertEquals(cancelada.longValue(), mapper.readTree(filteredNext.body()).get(0).get("id").asLong());
+        assertEquals(2, mapper.readTree(call("GET", "/polizas?estado=ACTIVA", null,
+                "api-key", "123456").body()).size());
+        assertEquals(1, mapper.readTree(call("GET", "/polizas?tipo=COLECTIVA&estado=ACTIVA", null,
+                "api-key", "123456").body()).size());
+        assertEquals(0, core.count.get());
+    }
+    @Test void defaultAndMaximumLimitBoundResults() throws Exception {
+        java.util.List<Poliza> extra = new java.util.ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            extra.add(new Poliza(TipoPoliza.COLECTIVA, EstadoPoliza.ACTIVA,
+                    LocalDate.of(2026, 1, 1), 12, new BigDecimal("1000.00")));
+        }
+        polizas.saveAllAndFlush(extra);
+        var defaultPage = call("GET", "/polizas", null, "api-key", "123456");
+        assertEquals(50, mapper.readTree(defaultPage.body()).size());
+        assertEquals("true", defaultPage.headers().firstValue("X-Has-More").orElseThrow());
+        var maximum = call("GET", "/polizas?limit=100", null, "api-key", "123456");
+        assertEquals(100, mapper.readTree(maximum.body()).size());
+        var next = call("GET", "/polizas?limit=100&afterId="
+                + maximum.headers().firstValue("X-Next-Cursor").orElseThrow(), null, "api-key", "123456");
+        assertEquals(3, mapper.readTree(next.body()).size());
+        assertEquals("false", next.headers().firstValue("X-Has-More").orElseThrow());
+        assertEquals(0, core.count.get());
+    }
+    @Test void invalidHttpRequestsRetainTheirStatus() throws Exception {
+        var unsupported = call("PUT", "/polizas", null, "api-key", "123456");
+        assertEquals(405, unsupported.statusCode());
+        assertTrue(unsupported.headers().firstValue("Allow").orElseThrow().contains("GET"));
+        assertEquals(404, call("GET", "/ruta-inexistente", null, "api-key", "123456").statusCode());
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                + "/polizas/" + individual + "/renovar"))
+                .header("api-key", "123456").header("Content-Type", "text/plain")
+                .POST(HttpRequest.BodyPublishers.ofString("ipc=5")).build();
+        assertEquals(415, http.send(request, HttpResponse.BodyHandlers.ofString()).statusCode());
         assertEquals(0, core.count.get());
     }
     @Test void renewAndBusinessRules() throws Exception {
@@ -94,9 +165,13 @@ class ApiIntegrationTest {
         assertEquals(1, core.count.get());
     }
     @Test void cancelCascadeAndIdempotence() throws Exception {
+        Poliza parent = polizas.findById(colectiva).orElseThrow();
+        Long other = riesgos.saveAndFlush(new Riesgo(parent, "Otro", EstadoRiesgo.ACTIVO)).id;
         String path = "/polizas/" + colectiva + "/cancelar";
         assertEquals(200, call("POST", path, null, "api-key", "123456").statusCode());
         assertEquals(EstadoRiesgo.CANCELADO, riesgos.findById(riesgoColectivo).orElseThrow().estado);
+        assertEquals(EstadoRiesgo.CANCELADO, riesgos.findById(other).orElseThrow().estado);
+        assertEquals(2, riesgos.findByPolizaIdOrderByIdAsc(colectiva).size());
         assertEquals(200, call("POST", path, null, "api-key", "123456").statusCode());
         assertEquals(1, core.count.get());
         assertEquals(409, call("POST", "/polizas/" + colectiva + "/riesgos", "{\"descripcion\":\"C\"}", "api-key", "123456").statusCode());

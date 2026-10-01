@@ -22,7 +22,7 @@ Cada ruta requiere `api-key: 123456` o `x-api-key: 123456`. Si se envían ambos,
 
 | Método y ruta | Respuesta correcta | Descripción |
 | --- | --- | --- |
-| `GET /polizas?tipo=&estado=` | `200` | Filtros opcionales `INDIVIDUAL`/`COLECTIVA` y `ACTIVA`/`RENOVADA`/`CANCELADA`, combinados con AND. |
+| `GET /polizas?tipo=&estado=&limit=&afterId=` | `200` | Filtros opcionales `INDIVIDUAL`/`COLECTIVA` y `ACTIVA`/`RENOVADA`/`CANCELADA`, combinados con AND. Usa cursor por id, límite predeterminado 50 y máximo 100. |
 | `GET /polizas/{id}/riesgos` | `200` | Incluye riesgos cancelados. |
 | `POST /polizas/{id}/renovar` | `200` | Cuerpo `{"ipcPorcentaje":5.00}`. |
 | `POST /polizas/{id}/cancelar` | `200` | Cancela lógicamente póliza y riesgos. |
@@ -31,6 +31,25 @@ Cada ruta requiere `api-key: 123456` o `x-api-key: 123456`. Si se envían ambos,
 | `POST /core-mock/evento` | `204` | Cuerpo `{"evento":"ACTUALIZACION","polizaId":555}`; solo registra el evento. |
 
 Los DTOs de respuesta exponen id, estado, fechas, canon y prima de póliza, o id, póliza, descripción y estado de riesgo. Los errores usan `{timestamp,status,code,message,path,fieldErrors}`. Códigos principales: `400 VALIDATION_ERROR`, `404 NOT_FOUND`, `409 BUSINESS_RULE_VIOLATION` o `CONCURRENT_OPERATION`, `502 CORE_UNAVAILABLE`, `500 INTERNAL_ERROR`.
+
+### Paginación de pólizas
+
+`GET /polizas` conserva el arreglo JSON original para mantener el contrato sencillo. Retorna como máximo 50 registros si no se indica `limit`; el valor aceptado está entre 1 y 100. Cuando existen más resultados, la respuesta incluye:
+
+- `X-Has-More: true`
+- `X-Next-Cursor: <id de la última póliza devuelta>`
+- `Link: <URL de la página siguiente>; rel="next"`
+
+Para continuar, se envía ese valor como `afterId`. El cursor se combina con los filtros `tipo` y `estado`:
+
+```bash
+curl -i 'http://localhost:8080/polizas?tipo=COLECTIVA&estado=ACTIVA&limit=50' -H 'api-key: 123456'
+curl -i 'http://localhost:8080/polizas?tipo=COLECTIVA&estado=ACTIVA&limit=50&afterId=120' -H 'api-key: 123456'
+```
+
+La búsqueda usa `id > afterId` y evita recorrer las filas descartadas por un `OFFSET` grande. No calcula el total de registros en cada petición, porque un `COUNT` sobre millones de filas puede ser costoso. Cada combinación de filtros ejecuta una consulta específica, sin condiciones opcionales con `OR`. Los índices `(tipo, estado, id)`, `(tipo, id)` y `(estado, id)` cubren esas consultas; la clave primaria cubre el listado sin filtros. La contrapartida es que el cliente avanza de forma secuencial y no salta directamente a un número de página.
+
+Para continuar deben mantenerse los mismos filtros. El cursor es un id, no una sesión ni una instantánea: si una póliza cambia de estado durante el recorrido, la siguiente petición consulta los datos vigentes. El límite acota las filas transferidas y cargadas en memoria; el rendimiento con millones de registros debe comprobarse en el motor productivo mediante su plan de ejecución. Los índices añaden espacio y trabajo en las escrituras.
 
 ## Seed comprobado
 
@@ -44,7 +63,7 @@ Los DTOs de respuesta exponen id, estado, fechas, canon y prima de póliza, o id
 ## Ejemplos
 
 ```bash
-curl -i 'http://localhost:8080/polizas?tipo=COLECTIVA&estado=ACTIVA' -H 'api-key: 123456'
+curl -i 'http://localhost:8080/polizas?tipo=COLECTIVA&estado=ACTIVA&limit=50' -H 'api-key: 123456'
 curl -i http://localhost:8080/polizas/1/riesgos -H 'api-key: 123456'
 curl -i -X POST http://localhost:8080/polizas/1/renovar -H 'api-key: 123456' -H 'Content-Type: application/json' -d '{"ipcPorcentaje":5.00}'
 curl -i -X POST http://localhost:8080/polizas/2/riesgos -H 'api-key: 123456' -H 'Content-Type: application/json' -d '{"descripcion":"Apartamento 301"}'
@@ -68,10 +87,13 @@ curl -i -X POST http://localhost:8080/polizas/1/riesgos -H 'api-key: 123456' -H 
 - Las fechas usan fin exclusivo. La renovación empieza en el fin anterior, añade los meses de vigencia inicial con `plusMonths`, y es repetible: cada POST válido abre otro período y aplica nuevamente el porcentaje. No hay reintentos automáticos.
 - `ACTIVA` es el estado inicial. Un riesgo tiene descripción de hasta 200 caracteres y cancelación lógica. Una individual no admite riesgos adicionales. Se permite cancelar el último riesgo de una colectiva. Cancelar de nuevo retorna el estado actual sin nuevo evento.
 - Las mutaciones de una póliza toman un bloqueo pesimista sobre ella. Esto serializa operaciones de la misma póliza y evita agregar riesgos activos durante su cancelación. H2 sirve para demostrar la lógica local, no el comportamiento de un motor productivo.
+- La cancelación de una colectiva actualiza sus riesgos mediante una sola sentencia de base de datos, sin cargar la colección completa en memoria. Conserva las filas, el bloqueo de la póliza, el envío de un único evento al CORE y el rollback de todos los cambios si ese envío falla.
 - Después de guardar y hacer flush de una mutación real, el cliente envía por HTTP `ACTUALIZACION` al mock con el id de póliza. La cancelación de varios riesgos produce un solo evento. El mock no modifica la base y acepta ids inexistentes como 555. Hay 1 segundo para conectar y 2 segundos de espera de respuesta; no hay reintentos.
 - Un fallo HTTP o timeout CORE causa `502` y rollback local. HTTP y la transacción H2 **no son atómicos**: el mock puede recibir un evento aunque la transacción se revierta. Una solución real requeriría outbox y deduplicación.
 - Se registran intento, éxito o fallo del envío y recepción en el mock con ids técnicos y correlación, sin registrar la clave. El valor de la clave es solo de demostración.
 
 ## Verificación realizada
 
-`./mvnw clean verify` pasó con 11 pruebas: rutas, filtros, reglas, concurrencia acotada, rollback, cliente HTTP con servidor stub y flujo HTTP completo contra el mock real. También se inició `target/polizas-api.jar` y se comprobó `GET /polizas` (cuatro registros del seed), `x-api-key` y renovación del id 1 (`1,050,000.00` de canon, `12,600,000.00` de prima). La ejecución local usó Java 25 para compilar con `release 21`; el proyecto requiere Java 21 o posterior compatible con Spring Boot 4.1.1.
+`./mvnw clean verify` pasó con 14 pruebas: rutas, filtros, recorrido completo del cursor, límite predeterminado y máximo, errores HTTP, reglas, concurrencia acotada, rollback, cliente HTTP con servidor stub y flujo HTTP completo contra el mock real. La ejecución local usó Java 25 para compilar con `release 21`; el proyecto requiere Java 21 o posterior compatible con Spring Boot 4.1.1.
+
+GitHub Actions ejecuta el mismo comando con Java 21 en cada pull request y en los cambios que llegan a `main`.

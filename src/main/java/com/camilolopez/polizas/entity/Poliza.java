@@ -7,7 +7,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(indexes = @Index(name = "idx_poliza_tipo_estado", columnList = "tipo,estado"))
+@Table(indexes = {
+        @Index(name = "idx_poliza_tipo_estado_id", columnList = "tipo,estado,id"),
+        @Index(name = "idx_poliza_tipo_id", columnList = "tipo,id"),
+        @Index(name = "idx_poliza_estado_id", columnList = "estado,id")
+})
 public class Poliza {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     public Long id;
