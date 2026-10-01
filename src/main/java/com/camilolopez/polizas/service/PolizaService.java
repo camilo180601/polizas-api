@@ -65,9 +65,7 @@ public class PolizaService {
         Poliza p = lock(id);
         if (p.estado == EstadoPoliza.CANCELADA) return PolizaResponse.from(p);
         p.estado = EstadoPoliza.CANCELADA;
-        List<Riesgo> hijos = riesgos.findByPolizaIdOrderByIdAsc(id);
-        hijos.forEach(r -> r.estado = EstadoRiesgo.CANCELADO);
-        riesgos.saveAllAndFlush(hijos);
+        riesgos.cancelarPorPoliza(id);
         polizas.saveAndFlush(p);
         core.actualizacion(id, "CANCELAR_POLIZA");
         return PolizaResponse.from(p);
