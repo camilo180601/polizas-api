@@ -74,7 +74,19 @@ class ApiIntegrationTest {
     @Test void listAndValidation() throws Exception {
         assertEquals(200, call("GET", "/polizas?tipo=COLECTIVA&estado=ACTIVA", null, "api-key", "123456").statusCode());
         assertEquals("[]", call("GET", "/polizas?tipo=COLECTIVA&estado=CANCELADA", null, "api-key", "123456").body());
+        HttpResponse<String> first = call("GET", "/polizas?limit=1", null, "api-key", "123456");
+        assertEquals(200, first.statusCode());
+        assertEquals("true", first.headers().firstValue("X-Has-More").orElseThrow());
+        assertEquals(individual.toString(), first.headers().firstValue("X-Next-Cursor").orElseThrow());
+        assertTrue(first.headers().firstValue("Link").orElseThrow().contains("afterId=" + individual));
+        assertTrue(first.body().contains("\"id\":" + individual));
+        HttpResponse<String> second = call("GET", "/polizas?limit=1&afterId=" + individual,
+                null, "api-key", "123456");
+        assertTrue(second.body().contains("\"id\":" + colectiva));
         assertEquals(400, call("GET", "/polizas?tipo=BAD", null, "api-key", "123456").statusCode());
+        assertEquals(400, call("GET", "/polizas?limit=0", null, "api-key", "123456").statusCode());
+        assertEquals(400, call("GET", "/polizas?limit=101", null, "api-key", "123456").statusCode());
+        assertEquals(400, call("GET", "/polizas?afterId=-1", null, "api-key", "123456").statusCode());
         assertEquals(400, call("GET", "/polizas/abc/riesgos", null, "api-key", "123456").statusCode());
         assertEquals(400, call("GET", "/polizas/0/riesgos", null, "api-key", "123456").statusCode());
         assertEquals(404, call("GET", "/polizas/999999/riesgos", null, "api-key", "123456").statusCode());

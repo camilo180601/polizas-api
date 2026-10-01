@@ -7,6 +7,7 @@ import com.camilolopez.polizas.integration.CoreClient;
 import com.camilolopez.polizas.repository.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.PageRequest;
 import java.math.*;
 import java.util.List;
 
@@ -19,8 +20,13 @@ public class PolizaService {
         this.polizas = polizas; this.riesgos = riesgos; this.core = core;
     }
     @Transactional(readOnly = true)
-    public List<PolizaResponse> listar(TipoPoliza tipo, EstadoPoliza estado) {
-        return polizas.buscar(tipo, estado).stream().map(PolizaResponse::from).toList();
+    public CursorPage<PolizaResponse> listar(TipoPoliza tipo, EstadoPoliza estado, Long afterId, int limit) {
+        List<Poliza> found = polizas.buscar(tipo, estado, afterId, PageRequest.of(0, limit + 1));
+        boolean hasMore = found.size() > limit;
+        List<Poliza> current = hasMore ? found.subList(0, limit) : found;
+        List<PolizaResponse> items = current.stream().map(PolizaResponse::from).toList();
+        Long nextCursor = hasMore ? current.get(current.size() - 1).id : null;
+        return new CursorPage<>(items, nextCursor);
     }
     @Transactional(readOnly = true)
     public List<RiesgoResponse> riesgos(Long id) {

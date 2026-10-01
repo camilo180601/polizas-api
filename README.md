@@ -22,7 +22,7 @@ Cada ruta requiere `api-key: 123456` o `x-api-key: 123456`. Si se envían ambos,
 
 | Método y ruta | Respuesta correcta | Descripción |
 | --- | --- | --- |
-| `GET /polizas?tipo=&estado=` | `200` | Filtros opcionales `INDIVIDUAL`/`COLECTIVA` y `ACTIVA`/`RENOVADA`/`CANCELADA`, combinados con AND. |
+| `GET /polizas?tipo=&estado=&limit=&afterId=` | `200` | Filtros opcionales `INDIVIDUAL`/`COLECTIVA` y `ACTIVA`/`RENOVADA`/`CANCELADA`, combinados con AND. Usa cursor por id, límite predeterminado 50 y máximo 100. |
 | `GET /polizas/{id}/riesgos` | `200` | Incluye riesgos cancelados. |
 | `POST /polizas/{id}/renovar` | `200` | Cuerpo `{"ipcPorcentaje":5.00}`. |
 | `POST /polizas/{id}/cancelar` | `200` | Cancela lógicamente póliza y riesgos. |
@@ -31,6 +31,23 @@ Cada ruta requiere `api-key: 123456` o `x-api-key: 123456`. Si se envían ambos,
 | `POST /core-mock/evento` | `204` | Cuerpo `{"evento":"ACTUALIZACION","polizaId":555}`; solo registra el evento. |
 
 Los DTOs de respuesta exponen id, estado, fechas, canon y prima de póliza, o id, póliza, descripción y estado de riesgo. Los errores usan `{timestamp,status,code,message,path,fieldErrors}`. Códigos principales: `400 VALIDATION_ERROR`, `404 NOT_FOUND`, `409 BUSINESS_RULE_VIOLATION` o `CONCURRENT_OPERATION`, `502 CORE_UNAVAILABLE`, `500 INTERNAL_ERROR`.
+
+### Paginación de pólizas
+
+`GET /polizas` conserva el arreglo JSON original para mantener el contrato sencillo. Retorna como máximo 50 registros si no se indica `limit`; el valor aceptado está entre 1 y 100. Cuando existen más resultados, la respuesta incluye:
+
+- `X-Has-More: true`
+- `X-Next-Cursor: <id de la última póliza devuelta>`
+- `Link: <URL de la página siguiente>; rel="next"`
+
+Para continuar, se envía ese valor como `afterId`. El cursor se combina con los filtros `tipo` y `estado`:
+
+```bash
+curl -i 'http://localhost:8080/polizas?tipo=COLECTIVA&estado=ACTIVA&limit=50' -H 'api-key: 123456'
+curl -i 'http://localhost:8080/polizas?tipo=COLECTIVA&estado=ACTIVA&limit=50&afterId=120' -H 'api-key: 123456'
+```
+
+La búsqueda usa `id > afterId` y evita recorrer las filas descartadas por un `OFFSET` grande. No calcula el total de registros en cada petición, porque un `COUNT` sobre millones de filas puede ser costoso. Los índices `(tipo, estado, id)`, `(tipo, id)` y `(estado, id)` cubren las combinaciones de filtros; la clave primaria cubre el listado sin filtros. La contrapartida es que el cliente avanza de forma secuencial y no salta directamente a un número de página.
 
 ## Seed comprobado
 
@@ -44,7 +61,7 @@ Los DTOs de respuesta exponen id, estado, fechas, canon y prima de póliza, o id
 ## Ejemplos
 
 ```bash
-curl -i 'http://localhost:8080/polizas?tipo=COLECTIVA&estado=ACTIVA' -H 'api-key: 123456'
+curl -i 'http://localhost:8080/polizas?tipo=COLECTIVA&estado=ACTIVA&limit=50' -H 'api-key: 123456'
 curl -i http://localhost:8080/polizas/1/riesgos -H 'api-key: 123456'
 curl -i -X POST http://localhost:8080/polizas/1/renovar -H 'api-key: 123456' -H 'Content-Type: application/json' -d '{"ipcPorcentaje":5.00}'
 curl -i -X POST http://localhost:8080/polizas/2/riesgos -H 'api-key: 123456' -H 'Content-Type: application/json' -d '{"descripcion":"Apartamento 301"}'
