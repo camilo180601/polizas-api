@@ -92,3 +92,5 @@ curl -i -X POST http://localhost:8080/polizas/1/riesgos -H 'api-key: 123456' -H 
 ## Verificación realizada
 
 `./mvnw clean verify` pasó con 11 pruebas: rutas, filtros, reglas, concurrencia acotada, rollback, cliente HTTP con servidor stub y flujo HTTP completo contra el mock real. También se inició `target/polizas-api.jar` y se comprobó `GET /polizas` (cuatro registros del seed), `x-api-key` y renovación del id 1 (`1,050,000.00` de canon, `12,600,000.00` de prima). La ejecución local usó Java 25 para compilar con `release 21`; el proyecto requiere Java 21 o posterior compatible con Spring Boot 4.1.1.
+
+GitHub Actions ejecuta el mismo comando con Java 21 en cada pull request y en los cambios que llegan a `main`.
