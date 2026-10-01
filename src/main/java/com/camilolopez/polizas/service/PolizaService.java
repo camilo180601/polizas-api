@@ -21,7 +21,17 @@ public class PolizaService {
     }
     @Transactional(readOnly = true)
     public CursorPage<PolizaResponse> listar(TipoPoliza tipo, EstadoPoliza estado, Long afterId, int limit) {
-        List<Poliza> found = polizas.buscar(tipo, estado, afterId, PageRequest.of(0, limit + 1));
+        PageRequest page = PageRequest.of(0, limit + 1);
+        List<Poliza> found;
+        if (tipo != null && estado != null) {
+            found = polizas.findByTipoAndEstadoAndIdGreaterThanOrderByIdAsc(tipo, estado, afterId, page);
+        } else if (tipo != null) {
+            found = polizas.findByTipoAndIdGreaterThanOrderByIdAsc(tipo, afterId, page);
+        } else if (estado != null) {
+            found = polizas.findByEstadoAndIdGreaterThanOrderByIdAsc(estado, afterId, page);
+        } else {
+            found = polizas.findByIdGreaterThanOrderByIdAsc(afterId, page);
+        }
         boolean hasMore = found.size() > limit;
         List<Poliza> current = hasMore ? found.subList(0, limit) : found;
         List<PolizaResponse> items = current.stream().map(PolizaResponse::from).toList();

@@ -47,7 +47,7 @@ curl -i 'http://localhost:8080/polizas?tipo=COLECTIVA&estado=ACTIVA&limit=50' -H
 curl -i 'http://localhost:8080/polizas?tipo=COLECTIVA&estado=ACTIVA&limit=50&afterId=120' -H 'api-key: 123456'
 ```
 
-La búsqueda usa `id > afterId` y evita recorrer las filas descartadas por un `OFFSET` grande. No calcula el total de registros en cada petición, porque un `COUNT` sobre millones de filas puede ser costoso. Los índices `(tipo, estado, id)`, `(tipo, id)` y `(estado, id)` cubren las combinaciones de filtros; la clave primaria cubre el listado sin filtros. La contrapartida es que el cliente avanza de forma secuencial y no salta directamente a un número de página.
+La búsqueda usa `id > afterId` y evita recorrer las filas descartadas por un `OFFSET` grande. No calcula el total de registros en cada petición, porque un `COUNT` sobre millones de filas puede ser costoso. Cada combinación de filtros ejecuta una consulta específica, sin condiciones opcionales con `OR`. Los índices `(tipo, estado, id)`, `(tipo, id)` y `(estado, id)` cubren esas consultas; la clave primaria cubre el listado sin filtros. La contrapartida es que el cliente avanza de forma secuencial y no salta directamente a un número de página.
 
 ## Seed comprobado
 
